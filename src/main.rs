@@ -2,6 +2,8 @@ use base64::display::Base64Display;
 use base64::engine::general_purpose::STANDARD;
 use clap::{Arg, ArgAction, Command};
 
+#[cfg(feature = "serde")]
+use simplicity::jet::Elements;
 use simplicityhl::CompiledProgram;
 use std::{env, fmt};
 
@@ -80,12 +82,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_json = matches.get_flag("json");
 
     #[cfg(feature = "serde")]
-    let args_opt: simplicityhl::Arguments = match matches.get_one::<String>("args_file") {
+    let args_opt: simplicityhl::Arguments<Elements> = match matches.get_one::<String>("args_file") {
         None => simplicityhl::Arguments::default(),
         Some(args_file) => {
             let args_path = std::path::Path::new(&args_file);
             let args_text = std::fs::read_to_string(args_path).map_err(|e| e.to_string())?;
-            serde_json::from_str::<simplicityhl::Arguments>(&args_text)?
+            serde_json::from_str::<simplicityhl::Arguments<Elements>>(&args_text)?
         }
     };
     #[cfg(not(feature = "serde"))]
@@ -109,12 +111,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "serde")]
     let witness_opt = matches
         .get_one::<String>("wit_file")
-        .map(|wit_file| -> Result<simplicityhl::WitnessValues, String> {
-            let wit_path = std::path::Path::new(wit_file);
-            let wit_text = std::fs::read_to_string(wit_path).map_err(|e| e.to_string())?;
-            let witness = serde_json::from_str::<simplicityhl::WitnessValues>(&wit_text).unwrap();
-            Ok(witness)
-        })
+        .map(
+            |wit_file| -> Result<simplicityhl::WitnessValues<Elements>, String> {
+                let wit_path = std::path::Path::new(wit_file);
+                let wit_text = std::fs::read_to_string(wit_path).map_err(|e| e.to_string())?;
+                let witness =
+                    serde_json::from_str::<simplicityhl::WitnessValues<Elements>>(&wit_text)
+                        .unwrap();
+                Ok(witness)
+            },
+        )
         .transpose()?;
     #[cfg(not(feature = "serde"))]
     let witness_opt = if matches.contains_id("wit_file") {

@@ -6,6 +6,7 @@ use hashes::{sha256, Hash, HashEngine};
 use simplicity::{hashes, Cmr};
 
 use crate::error::Span;
+use crate::jet::JetHL;
 use crate::types::ResolvedType;
 use crate::value::{StructuralValue, Value};
 
@@ -46,27 +47,27 @@ pub enum TrackedCallName {
 
 /// Fallible call expression with runtime input value.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct FallibleCall {
+pub struct FallibleCall<J: JetHL> {
     text: Arc<str>,
-    name: FallibleCallName,
+    name: FallibleCallName<J>,
 }
 
 /// Name of a fallible call expression with runtime input value.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub enum FallibleCallName {
+pub enum FallibleCallName<J: JetHL> {
     Assert,
     Panic,
     Jet,
-    UnwrapLeft(Value),
-    UnwrapRight(Value),
+    UnwrapLeft(Value<J>),
+    UnwrapRight(Value<J>),
     Unwrap,
 }
 
 /// Debug expression with runtime input value.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct DebugValue {
+pub struct DebugValue<J: JetHL> {
     text: Arc<str>,
-    value: Value,
+    value: Value<J>,
 }
 
 impl DebugSymbols {
@@ -168,7 +169,10 @@ impl TrackedCall {
     ///
     /// Return `None` if the Simplicity input value is of the wrong type,
     /// according to the debug symbol.
-    pub fn map_value(&self, value: &StructuralValue) -> Option<Either<FallibleCall, DebugValue>> {
+    pub fn map_value<J: JetHL>(
+        &self,
+        value: &StructuralValue,
+    ) -> Option<Either<FallibleCall<J>, DebugValue<J>>> {
         let name = match self.name() {
             TrackedCallName::Assert => FallibleCallName::Assert,
             TrackedCallName::Panic => FallibleCallName::Panic,
@@ -196,26 +200,26 @@ impl TrackedCall {
     }
 }
 
-impl FallibleCall {
+impl<J: JetHL> FallibleCall<J> {
     /// Access the SimplicityHL text of the call expression.
     pub fn text(&self) -> &str {
         &self.text
     }
 
     /// Access the name of the call.
-    pub fn name(&self) -> &FallibleCallName {
+    pub fn name(&self) -> &FallibleCallName<J> {
         &self.name
     }
 }
 
-impl DebugValue {
+impl<J: JetHL> DebugValue<J> {
     /// Access the SimplicityHL text of the debug expression.
     pub fn text(&self) -> &str {
         &self.text
     }
 
     /// Access the runtime input value.
-    pub fn value(&self) -> &Value {
+    pub fn value(&self) -> &Value<J> {
         &self.value
     }
 }

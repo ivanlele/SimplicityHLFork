@@ -3,6 +3,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::error::{Error, RichError, WithFile, WithSpan};
+use crate::jet::JetHL;
 use crate::parse;
 use crate::parse::ParseFromStr;
 use crate::str::WitnessName;
@@ -38,20 +39,20 @@ macro_rules! impl_name_type_map {
 
 macro_rules! impl_name_value_map {
     ($wrapper: ident, $module_name: expr) => {
-        impl $wrapper {
+        impl<J: JetHL> $wrapper<J> {
             /// Access the inner map.
             #[cfg(feature = "serde")]
-            pub(crate) fn as_inner(&self) -> &HashMap<WitnessName, Value> {
+            pub(crate) fn as_inner(&self) -> &HashMap<WitnessName, Value<J>> {
                 &self.0
             }
 
             /// Get the value that is assigned to the given name.
-            pub fn get(&self, name: &WitnessName) -> Option<&Value> {
+            pub fn get(&self, name: &WitnessName) -> Option<&Value<J>> {
                 self.0.get(name)
             }
 
             /// Create an iterator over all name-value pairs.
-            pub fn iter(&self) -> impl Iterator<Item = (&WitnessName, &Value)> {
+            pub fn iter(&self) -> impl Iterator<Item = (&WitnessName, &Value<J>)> {
                 self.0.iter()
             }
 
@@ -61,19 +62,19 @@ macro_rules! impl_name_value_map {
             }
         }
 
-        impl From<HashMap<WitnessName, Value>> for $wrapper {
-            fn from(value: HashMap<WitnessName, Value>) -> Self {
+        impl<J: JetHL> From<HashMap<WitnessName, Value<J>>> for $wrapper<J> {
+            fn from(value: HashMap<WitnessName, Value<J>>) -> Self {
                 Self(Arc::new(value))
             }
         }
 
-        impl ParseFromStr for $wrapper {
+        impl<J: JetHL> ParseFromStr for $wrapper<J> {
             fn parse_from_str(s: &str) -> Result<Self, RichError> {
                 parse::ModuleProgram::parse_from_str(s).and_then(|x| Self::analyze(&x))
             }
         }
 
-        impl fmt::Display for $wrapper {
+        impl<J: JetHL> fmt::Display for $wrapper<J> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 use itertools::Itertools;
 
@@ -95,13 +96,19 @@ pub struct WitnessTypes(Arc<HashMap<WitnessName, ResolvedType>>);
 impl_name_type_map!(WitnessTypes);
 
 /// Map of witness values.
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct WitnessValues(Arc<HashMap<WitnessName, Value>>);
+pub struct WitnessValues<J: JetHL>(Arc<HashMap<WitnessName, Value<J>>>);
 
 impl_name_value_map!(WitnessValues, "witness");
 
-impl WitnessValues {
+impl<J: JetHL> Default for WitnessValues<J> {
+    fn default() -> Self {
+        Self(Arc::new(HashMap::new()))
+    }
+}
+
+impl<J: JetHL> WitnessValues<J> {
     /// Check if the witness values are consistent with the declared witness types.
     ///
     /// 1. Values that occur in the program are type checked.
@@ -155,13 +162,19 @@ impl_name_type_map!(Parameters);
 ///
 /// An argument is the value of a parameter.
 /// Arguments have a name and a value of a given type.
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Arguments(Arc<HashMap<WitnessName, Value>>);
+pub struct Arguments<J: JetHL>(Arc<HashMap<WitnessName, Value<J>>>);
 
 impl_name_value_map!(Arguments, "param");
 
-impl Arguments {
+impl<J: JetHL> Default for Arguments<J> {
+    fn default() -> Self {
+        Self(Arc::new(HashMap::new()))
+    }
+}
+
+impl<J: JetHL> Arguments<J> {
     /// Check if the arguments are consistent with the given parameters.
     ///
     /// 1. Each parameter must be supplied with an argument.
@@ -187,7 +200,7 @@ impl Arguments {
 }
 
 #[cfg(feature = "arbitrary")]
-impl crate::ArbitraryOfType for Arguments {
+impl<J: JetHL> crate::ArbitraryOfType for Arguments<J> {
     type Type = Parameters;
 
     fn arbitrary_of_type(
@@ -207,6 +220,8 @@ impl crate::ArbitraryOfType for Arguments {
 
 #[cfg(test)]
 mod tests {
+    use simplicity::jet::Elements;
+
     use super::*;
     use crate::parse::ParseFromStr;
     use crate::value::ValueConstructible;
@@ -218,7 +233,7 @@ mod tests {
     assert!(jet::eq_32(witness::A, witness::A));
 }"#;
         let program = parse::Program::parse_from_str(s).expect("parsing works");
-        match ast::Program::analyze(&program).map_err(Error::from) {
+        match ast::Program::<Elements>::analyze(&program).map_err(Error::from) {
             Ok(_) => panic!("Witness reuse was falsely accepted"),
             Err(Error::WitnessReused(..)) => {}
             Err(error) => panic!("Unexpected error: {error}"),
@@ -231,11 +246,12 @@ mod tests {
     assert!(jet::is_zero_32(witness::A));
 }"#;
 
-        let witness = WitnessValues::from(HashMap::from([(
+        let witness = WitnessValues::<Elements>::from(HashMap::from([(
             WitnessName::from_str_unchecked("A"),
             Value::u16(42),
         )]));
-        match SatisfiedProgram::new(s, Arguments::default(), witness, false) {
+        match SatisfiedProgram::<Elements>::new(s, Arguments::<Elements>::default(), witness, false)
+        {
             Ok(_) => panic!("Ill-typed witness assignment was falsely accepted"),
             Err(error) => assert_eq!(
                 "Witness `A` was declared with type `u32` but its assigned value is of type `u16`",
@@ -254,7 +270,7 @@ fn main() {
     assert!(jet::is_zero_32(f()));
 }"#;
 
-        match CompiledProgram::new(s, Arguments::default(), false) {
+        match CompiledProgram::new(s, Arguments::<Elements>::default(), false) {
             Ok(_) => panic!("Witness outside main was falsely accepted"),
             Err(error) => {
                 assert!(error
@@ -265,7 +281,7 @@ fn main() {
 
     #[test]
     fn missing_witness_module() {
-        match WitnessValues::parse_from_str("") {
+        match WitnessValues::<Elements>::parse_from_str("") {
             Ok(v) => assert!(
                 v.iter().next().is_none(),
                 "empty witness module was parsed as nonempty"
@@ -277,7 +293,7 @@ fn main() {
     #[test]
     fn redefined_witness_module() {
         let s = r#"mod witness {} mod witness {}"#;
-        match WitnessValues::parse_from_str(s) {
+        match WitnessValues::<Elements>::parse_from_str(s) {
             Ok(_) => panic!("Redefined witness module was falsely accepted"),
             Err(error) => assert!(error
                 .to_string()
@@ -287,7 +303,7 @@ fn main() {
 
     #[test]
     fn witness_to_string() {
-        let witness = WitnessValues::from(HashMap::from([
+        let witness = WitnessValues::<Elements>::from(HashMap::from([
             (WitnessName::from_str_unchecked("A"), Value::u32(1)),
             (WitnessName::from_str_unchecked("B"), Value::u32(2)),
             (WitnessName::from_str_unchecked("C"), Value::u32(3)),

@@ -1,15 +1,14 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use either::Either;
 use miniscript::iter::{Tree, TreeLike};
-use simplicity::jet::Elements;
 
 use crate::debug::{CallTracker, DebugSymbols, TrackedCallName};
 use crate::error::{Error, RichError, Span, WithSpan};
+use crate::jet::JetHL;
 use crate::num::{NonZeroPow2Usize, Pow2Usize};
 use crate::parse::MatchPattern;
 use crate::pattern::Pattern;
@@ -26,18 +25,18 @@ use crate::{impl_eq_hash, parse};
 /// Other items such as custom functions or type aliases
 /// are resolved during the creation of the AST.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Program {
-    main: Expression,
+pub struct Program<J: JetHL> {
+    main: Expression<J>,
     parameters: Parameters,
     witness_types: WitnessTypes,
     call_tracker: Arc<CallTracker>,
 }
 
-impl Program {
+impl<J: JetHL> Program<J> {
     /// Access the main function.
     ///
     /// There is exactly one main function for each program.
-    pub fn main(&self) -> &Expression {
+    pub fn main(&self) -> &Expression<J> {
         &self.main
     }
 
@@ -66,13 +65,13 @@ impl Program {
 ///
 /// All items except for the main function are resolved during the creation of the AST.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Item {
+pub enum Item<J: JetHL> {
     /// A type alias.
     ///
     /// A stub because the alias was resolved during the creation of the AST.
     TypeAlias,
     /// A function.
-    Function(Function),
+    Function(Function<J>),
     /// A module, which is ignored.
     Module,
 }
@@ -81,7 +80,7 @@ pub enum Item {
 ///
 /// All functions except for the main function are resolved during the creation of the AST.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Function {
+pub enum Function<J: JetHL> {
     /// A custom function.
     ///
     /// A stub because the definition of the function was moved to its calls in the main function.
@@ -93,7 +92,7 @@ pub enum Function {
     /// Otherwise, the expression signals success.
     ///
     /// This expression is evaluated when the program is run.
-    Main(Expression),
+    Main(Expression<J>),
 }
 
 /// A statement is a component of a block expression.
@@ -101,29 +100,29 @@ pub enum Function {
 /// Statements can define variables or run validating expressions,
 /// but they never return values.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum Statement {
+pub enum Statement<J: JetHL> {
     /// Variable assignment.
-    Assignment(Assignment),
+    Assignment(Assignment<J>),
     /// Expression that returns nothing (the unit value).
-    Expression(Expression),
+    Expression(Expression<J>),
 }
 
 /// Assignment of a value to a variable identifier.
 #[derive(Clone, Debug)]
-pub struct Assignment {
+pub struct Assignment<J: JetHL> {
     pattern: Pattern,
-    expression: Expression,
+    expression: Expression<J>,
     span: Span,
 }
 
-impl Assignment {
+impl<J: JetHL> Assignment<J> {
     /// Access the pattern of the assignment.
     pub fn pattern(&self) -> &Pattern {
         &self.pattern
     }
 
     /// Access the expression of the assignment.
-    pub fn expression(&self) -> &Expression {
+    pub fn expression(&self) -> &Expression<J> {
         &self.expression
     }
 
@@ -133,21 +132,21 @@ impl Assignment {
     }
 }
 
-impl_eq_hash!(Assignment; pattern, expression);
+impl_eq_hash!(Assignment<J: JetHL>; pattern, expression);
 
 /// An expression returns a value.
 #[derive(Clone, Debug)]
-pub struct Expression {
-    inner: ExpressionInner,
+pub struct Expression<J: JetHL> {
+    inner: ExpressionInner<J>,
     ty: ResolvedType,
     span: Span,
 }
 
-impl_eq_hash!(Expression; inner, ty);
+impl_eq_hash!(Expression<J: JetHL>; inner, ty);
 
-impl Expression {
+impl<J: JetHL> Expression<J> {
     /// Access the inner expression.
-    pub fn inner(&self) -> &ExpressionInner {
+    pub fn inner(&self) -> &ExpressionInner<J> {
         &self.inner
     }
 
@@ -164,26 +163,26 @@ impl Expression {
 
 /// Variant of an expression.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ExpressionInner {
+pub enum ExpressionInner<J: JetHL> {
     /// A single expression directly returns a value.
-    Single(SingleExpression),
+    Single(SingleExpression<J>),
     /// A block expression first executes a series of statements inside a local scope.
     /// Then, the block returns the value of its final expression.
     /// The block returns nothing (unit) if there is no final expression.
-    Block(Arc<[Statement]>, Option<Arc<Expression>>),
+    Block(Arc<[Statement<J>]>, Option<Arc<Expression<J>>>),
 }
 
 /// A single expression directly returns its value.
 #[derive(Clone, Debug)]
-pub struct SingleExpression {
-    inner: SingleExpressionInner,
+pub struct SingleExpression<J: JetHL> {
+    inner: SingleExpressionInner<J>,
     ty: ResolvedType,
     span: Span,
 }
 
-impl SingleExpression {
+impl<J: JetHL> SingleExpression<J> {
     /// Create a tuple expression from the given arguments and span.
-    pub fn tuple(args: Arc<[Expression]>, span: Span) -> Self {
+    pub fn tuple(args: Arc<[Expression<J>]>, span: Span) -> Self {
         let ty = ResolvedType::tuple(
             args.iter()
                 .map(Expression::ty)
@@ -195,7 +194,7 @@ impl SingleExpression {
     }
 
     /// Access the inner expression.
-    pub fn inner(&self) -> &SingleExpressionInner {
+    pub fn inner(&self) -> &SingleExpressionInner<J> {
         &self.inner
     }
 
@@ -210,13 +209,13 @@ impl SingleExpression {
     }
 }
 
-impl_eq_hash!(SingleExpression; inner, ty);
+impl_eq_hash!(SingleExpression<J: JetHL>; inner, ty);
 
 /// Variant of a single expression.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum SingleExpressionInner {
+pub enum SingleExpressionInner<J: JetHL> {
     /// Constant value.
-    Constant(Value),
+    Constant(Value<J>),
     /// Witness value.
     Witness(WitnessName),
     /// Parameter value.
@@ -224,39 +223,39 @@ pub enum SingleExpressionInner {
     /// Variable that has been assigned a value.
     Variable(Identifier),
     /// Expression in parentheses.
-    Expression(Arc<Expression>),
+    Expression(Arc<Expression<J>>),
     /// Tuple expression.
-    Tuple(Arc<[Expression]>),
+    Tuple(Arc<[Expression<J>]>),
     /// Array expression.
-    Array(Arc<[Expression]>),
+    Array(Arc<[Expression<J>]>),
     /// Bounded list of expressions.
-    List(Arc<[Expression]>),
+    List(Arc<[Expression<J>]>),
     /// Either expression.
-    Either(Either<Arc<Expression>, Arc<Expression>>),
+    Either(Either<Arc<Expression<J>>, Arc<Expression<J>>>),
     /// Option expression.
-    Option(Option<Arc<Expression>>),
+    Option(Option<Arc<Expression<J>>>),
     /// Call expression.
-    Call(Call),
+    Call(Call<J>),
     /// Match expression.
-    Match(Match),
+    Match(Match<J>),
 }
 
 /// Call of a user-defined or of a builtin function.
 #[derive(Clone, Debug)]
-pub struct Call {
-    name: CallName,
-    args: Arc<[Expression]>,
+pub struct Call<J: JetHL> {
+    name: CallName<J>,
+    args: Arc<[Expression<J>]>,
     span: Span,
 }
 
-impl Call {
+impl<J: JetHL> Call<J> {
     /// Access the name of the call.
-    pub fn name(&self) -> &CallName {
+    pub fn name(&self) -> &CallName<J> {
         &self.name
     }
 
     /// Access the arguments of the call.
-    pub fn args(&self) -> &Arc<[Expression]> {
+    pub fn args(&self) -> &Arc<[Expression<J>]> {
         &self.args
     }
 
@@ -266,13 +265,13 @@ impl Call {
     }
 }
 
-impl_eq_hash!(Call; name, args);
+impl_eq_hash!(Call<J: JetHL>; name, args);
 
 /// Name of a called function.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum CallName {
+pub enum CallName<J: JetHL> {
     /// Elements jet.
-    Jet(Elements),
+    Jet(J),
     /// [`Either::unwrap_left`].
     UnwrapLeft(ResolvedType),
     /// [`Either::unwrap_right`].
@@ -293,30 +292,30 @@ pub enum CallName {
     ///
     /// We effectively copy the function body into every call of the function.
     /// We use [`Arc`] for cheap clones during this process.
-    Custom(CustomFunction),
+    Custom(CustomFunction<J>),
     /// Fold of a bounded list with the given function.
-    Fold(CustomFunction, NonZeroPow2Usize),
+    Fold(CustomFunction<J>, NonZeroPow2Usize),
     /// Fold of an array with the given function.
-    ArrayFold(CustomFunction, NonZeroUsize),
+    ArrayFold(CustomFunction<J>, NonZeroUsize),
     /// Loop over the given function a bounded number of times until it returns success.
-    ForWhile(CustomFunction, Pow2Usize),
+    ForWhile(CustomFunction<J>, Pow2Usize),
 }
 
 /// Definition of a custom function.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct CustomFunction {
+pub struct CustomFunction<J: JetHL> {
     params: Arc<[FunctionParam]>,
-    body: Arc<Expression>,
+    body: Arc<Expression<J>>,
 }
 
-impl CustomFunction {
+impl<J: JetHL> CustomFunction<J> {
     /// Access the identifiers of the parameters of the function.
     pub fn params(&self) -> &[FunctionParam] {
         &self.params
     }
 
     /// Access the body of the function.
-    pub fn body(&self) -> &Expression {
+    pub fn body(&self) -> &Expression<J> {
         &self.body
     }
 
@@ -353,26 +352,26 @@ impl FunctionParam {
 
 /// Match expression.
 #[derive(Clone, Debug)]
-pub struct Match {
-    scrutinee: Arc<Expression>,
-    left: MatchArm,
-    right: MatchArm,
+pub struct Match<J: JetHL> {
+    scrutinee: Arc<Expression<J>>,
+    left: MatchArm<J>,
+    right: MatchArm<J>,
     span: Span,
 }
 
-impl Match {
+impl<J: JetHL> Match<J> {
     /// Access the expression whose output is destructed in the match statement.
-    pub fn scrutinee(&self) -> &Expression {
+    pub fn scrutinee(&self) -> &Expression<J> {
         &self.scrutinee
     }
 
     /// Access the branch that handles structural left values.
-    pub fn left(&self) -> &MatchArm {
+    pub fn left(&self) -> &MatchArm<J> {
         &self.left
     }
 
     /// Access the branch that handles structural right values.
-    pub fn right(&self) -> &MatchArm {
+    pub fn right(&self) -> &MatchArm<J> {
         &self.right
     }
 
@@ -382,44 +381,44 @@ impl Match {
     }
 }
 
-impl_eq_hash!(Match; scrutinee, left, right);
+impl_eq_hash!(Match<J: JetHL>; scrutinee, left, right);
 
 /// Arm of a [`Match`] expression.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MatchArm {
+pub struct MatchArm<J: JetHL> {
     pattern: MatchPattern,
-    expression: Arc<Expression>,
+    expression: Arc<Expression<J>>,
 }
 
-impl MatchArm {
+impl<J: JetHL> MatchArm<J> {
     /// Access the pattern of the match arm.
     pub fn pattern(&self) -> &MatchPattern {
         &self.pattern
     }
 
     /// Access the expression of the match arm.
-    pub fn expression(&self) -> &Expression {
+    pub fn expression(&self) -> &Expression<J> {
         &self.expression
     }
 }
 
 /// Item when analyzing modules.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ModuleItem {
+pub enum ModuleItem<J: JetHL> {
     Ignored,
-    Module(Module),
+    Module(Module<J>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct Module {
+pub struct Module<J: JetHL> {
     name: ModuleName,
-    assignments: Arc<[ModuleAssignment]>,
+    assignments: Arc<[ModuleAssignment<J>]>,
     span: Span,
 }
 
-impl Module {
+impl<J: JetHL> Module<J> {
     /// Access the assignments of the module.
-    pub fn assignments(&self) -> &[ModuleAssignment] {
+    pub fn assignments(&self) -> &[ModuleAssignment<J>] {
         &self.assignments
     }
 
@@ -430,20 +429,20 @@ impl Module {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct ModuleAssignment {
+pub struct ModuleAssignment<J: JetHL> {
     name: WitnessName,
-    value: Value,
+    value: Value<J>,
     span: Span,
 }
 
-impl ModuleAssignment {
+impl<J: JetHL> ModuleAssignment<J> {
     /// Access the assigned witness name.
     pub fn name(&self) -> &WitnessName {
         &self.name
     }
 
     /// Access the assigned witness value.
-    pub fn value(&self) -> &Value {
+    pub fn value(&self) -> &Value<J> {
         &self.value
     }
 
@@ -454,17 +453,17 @@ impl ModuleAssignment {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum ExprTree<'a> {
-    Expression(&'a Expression),
-    Block(&'a [Statement], &'a Option<Arc<Expression>>),
-    Statement(&'a Statement),
-    Assignment(&'a Assignment),
-    Single(&'a SingleExpression),
-    Call(&'a Call),
-    Match(&'a Match),
+pub enum ExprTree<'a, J: JetHL> {
+    Expression(&'a Expression<J>),
+    Block(&'a [Statement<J>], &'a Option<Arc<Expression<J>>>),
+    Statement(&'a Statement<J>),
+    Assignment(&'a Assignment<J>),
+    Single(&'a SingleExpression<J>),
+    Call(&'a Call<J>),
+    Match(&'a Match<J>),
 }
 
-impl TreeLike for ExprTree<'_> {
+impl<J: JetHL> TreeLike for ExprTree<'_, J> {
     fn as_node(&self) -> Tree<Self> {
         use SingleExpressionInner as S;
 
@@ -520,18 +519,18 @@ impl TreeLike for ExprTree<'_> {
 /// 2. Resolving type aliases
 /// 3. Assigning types to each witness expression
 /// 4. Resolving calls to custom functions
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
-struct Scope {
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct Scope<J: JetHL> {
     variables: Vec<HashMap<Identifier, ResolvedType>>,
     aliases: HashMap<AliasName, ResolvedType>,
     parameters: HashMap<WitnessName, ResolvedType>,
     witnesses: HashMap<WitnessName, ResolvedType>,
-    functions: HashMap<FunctionName, CustomFunction>,
+    functions: HashMap<FunctionName, CustomFunction<J>>,
     is_main: bool,
     call_tracker: CallTracker,
 }
 
-impl Scope {
+impl<J: JetHL> Scope<J> {
     /// Check if the current scope is topmost.
     pub fn is_topmost(&self) -> bool {
         self.variables.is_empty()
@@ -679,7 +678,7 @@ impl Scope {
     pub fn insert_function(
         &mut self,
         name: FunctionName,
-        function: CustomFunction,
+        function: CustomFunction<J>,
     ) -> Result<(), Error> {
         match self.functions.entry(name.clone()) {
             Entry::Occupied(_) => Err(Error::FunctionRedefined(name)),
@@ -691,7 +690,7 @@ impl Scope {
     }
 
     /// Get the definition of a custom function.
-    pub fn get_function(&self, name: &FunctionName) -> Option<&CustomFunction> {
+    pub fn get_function(&self, name: &FunctionName) -> Option<&CustomFunction<J>> {
         self.functions.get(name)
     }
 
@@ -701,8 +700,21 @@ impl Scope {
     }
 }
 
+impl<J: JetHL> Default for Scope<J> {
+    fn default() -> Self {
+        Self {
+            variables: Vec::new(),
+            aliases: HashMap::new(),
+            parameters: HashMap::new(),
+            witnesses: HashMap::new(),
+            functions: HashMap::new(),
+            is_main: false,
+            call_tracker: CallTracker::default(),
+        }
+    }
+}
 /// Part of the abstract syntax tree that can be generated from a precursor in the parse tree.
-trait AbstractSyntaxTree: Sized {
+trait AbstractSyntaxTree<J: JetHL>: Sized {
     /// Component of the parse tree.
     type From;
 
@@ -711,18 +723,22 @@ trait AbstractSyntaxTree: Sized {
     ///
     /// Check if the analyzed expression is of the expected type.
     /// Statements return no values so their expected type is always unit.
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError>;
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError>;
 }
 
-impl Program {
+impl<J: JetHL> Program<J> {
     pub fn analyze(from: &parse::Program) -> Result<Self, RichError> {
         let unit = ResolvedType::unit();
-        let mut scope = Scope::default();
+        let mut scope = Scope::<J>::default();
         let items = from
             .items()
             .iter()
             .map(|s| Item::analyze(s, &unit, &mut scope))
-            .collect::<Result<Vec<Item>, RichError>>()?;
+            .collect::<Result<Vec<Item<J>>, RichError>>()?;
         debug_assert!(scope.is_topmost());
         let (parameters, witness_types, call_tracker) = scope.destruct();
         let mut iter = items.into_iter().filter_map(|item| match item {
@@ -742,10 +758,14 @@ impl Program {
     }
 }
 
-impl AbstractSyntaxTree for Item {
+impl<J: JetHL> AbstractSyntaxTree<J> for Item<J> {
     type From = parse::Item;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Items cannot return anything");
         assert!(scope.is_topmost(), "Items live in the topmost scope only");
 
@@ -764,10 +784,14 @@ impl AbstractSyntaxTree for Item {
     }
 }
 
-impl AbstractSyntaxTree for Function {
+impl<J: JetHL> AbstractSyntaxTree<J> for Function<J> {
     type From = parse::Function;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Function definitions cannot return anything");
         assert!(scope.is_topmost(), "Items live in the topmost scope only");
 
@@ -820,10 +844,14 @@ impl AbstractSyntaxTree for Function {
     }
 }
 
-impl AbstractSyntaxTree for Statement {
+impl<J: JetHL> AbstractSyntaxTree<J> for Statement<J> {
     type From = parse::Statement;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Statements cannot return anything");
         match from {
             parse::Statement::Assignment(assignment) => {
@@ -836,10 +864,14 @@ impl AbstractSyntaxTree for Statement {
     }
 }
 
-impl AbstractSyntaxTree for Assignment {
+impl<J: JetHL> AbstractSyntaxTree<J> for Assignment<J> {
     type From = parse::Assignment;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Assignments cannot return anything");
         // The assignment is a statement that returns nothing.
         //
@@ -860,7 +892,7 @@ impl AbstractSyntaxTree for Assignment {
     }
 }
 
-impl Expression {
+impl<J: JetHL> Expression<J> {
     /// Analyze an expression from the parse tree in a const context without predefined variables.
     ///
     /// Check if the expression is of the given type.
@@ -870,15 +902,19 @@ impl Expression {
     /// The returned expression might not be evaluable at compile time.
     /// The details depend on the current state of the SimplicityHL compiler.
     pub fn analyze_const(from: &parse::Expression, ty: &ResolvedType) -> Result<Self, RichError> {
-        let mut empty_scope = Scope::default();
+        let mut empty_scope = Scope::<J>::default();
         Self::analyze(from, ty, &mut empty_scope)
     }
 }
 
-impl AbstractSyntaxTree for Expression {
+impl<J: JetHL> AbstractSyntaxTree<J> for Expression<J> {
     type From = parse::Expression;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         match from.inner() {
             parse::ExpressionInner::Single(single) => {
                 let ast_single = SingleExpression::analyze(single, ty, scope)?;
@@ -893,7 +929,7 @@ impl AbstractSyntaxTree for Expression {
                 let ast_statements = statements
                     .iter()
                     .map(|s| Statement::analyze(s, &ResolvedType::unit(), scope))
-                    .collect::<Result<Arc<[Statement]>, RichError>>()?;
+                    .collect::<Result<Arc<[Statement<J>]>, RichError>>()?;
                 let ast_expression = match expression {
                     Some(expression) => Expression::analyze(expression, ty, scope)
                         .map(Arc::new)
@@ -917,10 +953,14 @@ impl AbstractSyntaxTree for Expression {
     }
 }
 
-impl AbstractSyntaxTree for SingleExpression {
+impl<J: JetHL> AbstractSyntaxTree<J> for SingleExpression<J> {
     type From = parse::SingleExpression;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         let inner = match from.inner() {
             parse::SingleExpressionInner::Boolean(bit) => {
                 if !ty.is_boolean() {
@@ -995,7 +1035,7 @@ impl AbstractSyntaxTree for SingleExpression {
                     .iter()
                     .zip(types.iter())
                     .map(|(el_parse, el_ty)| Expression::analyze(el_parse, el_ty, scope))
-                    .collect::<Result<Arc<[Expression]>, RichError>>()
+                    .collect::<Result<Arc<[Expression<J>]>, RichError>>()
                     .map(SingleExpressionInner::Tuple)?
             }
             parse::SingleExpressionInner::Array(array) => {
@@ -1009,7 +1049,7 @@ impl AbstractSyntaxTree for SingleExpression {
                 array
                     .iter()
                     .map(|el_parse| Expression::analyze(el_parse, el_ty, scope))
-                    .collect::<Result<Arc<[Expression]>, RichError>>()
+                    .collect::<Result<Arc<[Expression<J>]>, RichError>>()
                     .map(SingleExpressionInner::Array)?
             }
             parse::SingleExpressionInner::List(list) => {
@@ -1022,7 +1062,7 @@ impl AbstractSyntaxTree for SingleExpression {
                 }
                 list.iter()
                     .map(|e| Expression::analyze(e, el_ty, scope))
-                    .collect::<Result<Arc<[Expression]>, RichError>>()
+                    .collect::<Result<Arc<[Expression<J>]>, RichError>>()
                     .map(SingleExpressionInner::List)?
             }
             parse::SingleExpressionInner::Either(either) => {
@@ -1069,10 +1109,14 @@ impl AbstractSyntaxTree for SingleExpression {
     }
 }
 
-impl AbstractSyntaxTree for Call {
+impl<J: JetHL> AbstractSyntaxTree<J> for Call<J> {
     type From = parse::Call;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         fn check_argument_types(
             parse_args: &[parse::Expression],
             expected_tys: &[ResolvedType],
@@ -1101,30 +1145,30 @@ impl AbstractSyntaxTree for Call {
             }
         }
 
-        fn analyze_arguments(
+        fn analyze_arguments<J: JetHL>(
             parse_args: &[parse::Expression],
             args_tys: &[ResolvedType],
-            scope: &mut Scope,
-        ) -> Result<Arc<[Expression]>, RichError> {
+            scope: &mut Scope<J>,
+        ) -> Result<Arc<[Expression<J>]>, RichError> {
             let args = parse_args
                 .iter()
                 .zip(args_tys.iter())
                 .map(|(arg_parse, arg_ty)| Expression::analyze(arg_parse, arg_ty, scope))
-                .collect::<Result<Arc<[Expression]>, RichError>>()?;
+                .collect::<Result<Arc<[Expression<J>]>, RichError>>()?;
             Ok(args)
         }
 
         let name = CallName::analyze(from, ty, scope)?;
         let args = match name.clone() {
             CallName::Jet(jet) => {
-                let args_tys = crate::jet::source_type(jet)
+                let args_tys = J::source_type(jet)
                     .iter()
                     .map(AliasedType::resolve_builtin)
                     .collect::<Result<Vec<ResolvedType>, AliasName>>()
                     .map_err(Error::UndefinedAlias)
                     .with_span(from)?;
                 check_argument_types(from.args(), &args_tys).with_span(from)?;
-                let out_ty = crate::jet::target_type(jet)
+                let out_ty = J::target_type(jet)
                     .resolve_builtin()
                     .map_err(Error::UndefinedAlias)
                     .with_span(from)?;
@@ -1280,21 +1324,19 @@ impl AbstractSyntaxTree for Call {
     }
 }
 
-impl AbstractSyntaxTree for CallName {
+impl<J: JetHL> AbstractSyntaxTree<J> for CallName<J> {
     // Take parse::Call, so we have access to the span for pretty errors
     type From = parse::Call;
 
     fn analyze(
         from: &Self::From,
         _ty: &ResolvedType,
-        scope: &mut Scope,
+        scope: &mut Scope<J>,
     ) -> Result<Self, RichError> {
         match from.name() {
-            parse::CallName::Jet(name) => match Elements::from_str(name.as_inner()) {
-                Ok(Elements::CheckSigVerify | Elements::Verify) | Err(_) => {
-                    Err(Error::JetDoesNotExist(name.clone())).with_span(from)
-                }
-                Ok(jet) => Ok(Self::Jet(jet)),
+            parse::CallName::Jet(name) => match J::from_str(name.as_inner()) {
+                Ok(jet) => Ok(Self::Jet(J::filter(jet, name).with_span(from)?)),
+                Err(_) => Err(Error::JetDoesNotExist(name.clone())).with_span(from),
             },
             parse::CallName::UnwrapLeft(right_ty) => scope
                 .resolve(right_ty)
@@ -1387,10 +1429,14 @@ impl AbstractSyntaxTree for CallName {
     }
 }
 
-impl AbstractSyntaxTree for Match {
+impl<J: JetHL> AbstractSyntaxTree<J> for Match<J> {
     type From = parse::Match;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         let scrutinee_ty = from.scrutinee_type();
         let scrutinee_ty = scope.resolve(&scrutinee_ty).with_span(from)?;
         let scrutinee =
@@ -1426,17 +1472,17 @@ impl AbstractSyntaxTree for Match {
     }
 }
 
-fn analyze_named_module(
+fn analyze_named_module<J: JetHL>(
     name: ModuleName,
     from: &parse::ModuleProgram,
-) -> Result<HashMap<WitnessName, Value>, RichError> {
+) -> Result<HashMap<WitnessName, Value<J>>, RichError> {
     let unit = ResolvedType::unit();
-    let mut scope = Scope::default();
+    let mut scope = Scope::<J>::default();
     let items = from
         .items()
         .iter()
         .map(|s| ModuleItem::analyze(s, &unit, &mut scope))
-        .collect::<Result<Vec<ModuleItem>, RichError>>()?;
+        .collect::<Result<Vec<ModuleItem<J>>, RichError>>()?;
     debug_assert!(scope.is_topmost());
     let mut iter = items.into_iter().filter_map(|item| match item {
         ModuleItem::Module(module) if module.name == name => Some(module),
@@ -1462,22 +1508,26 @@ fn analyze_named_module(
     Ok(map)
 }
 
-impl WitnessValues {
+impl<J: JetHL> WitnessValues<J> {
     pub fn analyze(from: &parse::ModuleProgram) -> Result<Self, RichError> {
-        analyze_named_module(ModuleName::witness(), from).map(Self::from)
+        analyze_named_module::<J>(ModuleName::witness(), from).map(Self::from)
     }
 }
 
-impl crate::witness::Arguments {
+impl<J: JetHL> crate::witness::Arguments<J> {
     pub fn analyze(from: &parse::ModuleProgram) -> Result<Self, RichError> {
-        analyze_named_module(ModuleName::param(), from).map(Self::from)
+        analyze_named_module::<J>(ModuleName::param(), from).map(Self::from)
     }
 }
 
-impl AbstractSyntaxTree for ModuleItem {
+impl<J: JetHL> AbstractSyntaxTree<J> for ModuleItem<J> {
     type From = parse::ModuleItem;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Items cannot return anything");
         assert!(scope.is_topmost(), "Items live in the topmost scope only");
         match from {
@@ -1489,17 +1539,21 @@ impl AbstractSyntaxTree for ModuleItem {
     }
 }
 
-impl AbstractSyntaxTree for Module {
+impl<J: JetHL> AbstractSyntaxTree<J> for Module<J> {
     type From = parse::Module;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Modules cannot return anything");
         assert!(scope.is_topmost(), "Modules live in the topmost scope only");
         let assignments = from
             .assignments()
             .iter()
             .map(|s| ModuleAssignment::analyze(s, ty, scope))
-            .collect::<Result<Arc<[ModuleAssignment]>, RichError>>()?;
+            .collect::<Result<Arc<[ModuleAssignment<J>]>, RichError>>()?;
         debug_assert!(scope.is_topmost());
 
         Ok(Self {
@@ -1510,10 +1564,14 @@ impl AbstractSyntaxTree for Module {
     }
 }
 
-impl AbstractSyntaxTree for ModuleAssignment {
+impl<J: JetHL> AbstractSyntaxTree<J> for ModuleAssignment<J> {
     type From = parse::ModuleAssignment;
 
-    fn analyze(from: &Self::From, ty: &ResolvedType, scope: &mut Scope) -> Result<Self, RichError> {
+    fn analyze(
+        from: &Self::From,
+        ty: &ResolvedType,
+        scope: &mut Scope<J>,
+    ) -> Result<Self, RichError> {
         assert!(ty.is_unit(), "Assignments cannot return anything");
         let ty_expr = scope.resolve(from.ty()).with_span(from)?;
         let expression = Expression::analyze(from.expression(), &ty_expr, scope)?;
@@ -1529,43 +1587,43 @@ impl AbstractSyntaxTree for ModuleAssignment {
     }
 }
 
-impl AsRef<Span> for Assignment {
+impl<J: JetHL> AsRef<Span> for Assignment<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for Expression {
+impl<J: JetHL> AsRef<Span> for Expression<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for SingleExpression {
+impl<J: JetHL> AsRef<Span> for SingleExpression<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for Call {
+impl<J: JetHL> AsRef<Span> for Call<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for Match {
+impl<J: JetHL> AsRef<Span> for Match<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for Module {
+impl<J: JetHL> AsRef<Span> for Module<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }
 }
 
-impl AsRef<Span> for ModuleAssignment {
+impl<J: JetHL> AsRef<Span> for ModuleAssignment<J> {
     fn as_ref(&self) -> &Span {
         &self.span
     }

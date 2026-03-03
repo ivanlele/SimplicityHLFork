@@ -8,6 +8,7 @@ use simplicity::node::{
 use simplicity::Cmr;
 use simplicity::{types, FailEntropy};
 
+use crate::jet::JetHL;
 use crate::str::WitnessName;
 use crate::value::StructuralValue;
 use crate::witness::WitnessValues;
@@ -194,15 +195,15 @@ where
 /// It is the responsibility of the caller to ensure that the given witness `values` match the
 /// types in the construct `node`. This can be done by calling [`WitnessValues::is_consistent`]
 /// on the original SimplicityHL program before it is compiled to Simplicity.
-pub fn populate_witnesses<J: Jet>(
+pub fn populate_witnesses<J: JetHL>(
     node: &CommitNode<J>,
-    values: WitnessValues,
+    values: WitnessValues<J>,
 ) -> Result<Arc<node::RedeemNode<J>>, String> {
-    struct Populator {
-        values: WitnessValues,
+    struct Populator<J: JetHL> {
+        values: WitnessValues<J>,
     }
 
-    impl<J: Jet> Converter<WithNames<node::Commit<J>>, node::Redeem<J>> for Populator {
+    impl<J: JetHL> Converter<WithNames<node::Commit<J>>, node::Redeem<J>> for Populator<J> {
         type Error = String;
 
         fn convert_witness(

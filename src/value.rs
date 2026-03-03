@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use either::Either;
@@ -9,6 +10,7 @@ use simplicity::{BitCollector, Value as SimValue, ValueRef};
 
 use crate::array::{BTreeSlice, Combiner, Partition, Unfolder};
 use crate::error::{Error, RichError, WithSpan};
+use crate::jet::JetHL;
 use crate::num::{NonZeroPow2Usize, Pow2Usize, U256};
 use crate::parse::ParseFromStr;
 use crate::str::{Binary, Decimal, Hexadecimal};
@@ -364,11 +366,11 @@ pub trait ValueConstructible: Sized + From<bool> + From<UIntValue> {
 
 /// The structure of a SimplicityHL value.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ValueInner {
+pub enum ValueInner<J: JetHL> {
     /// Left value.
-    Either(Either<Arc<Value>, Arc<Value>>),
+    Either(Either<Arc<Value<J>>, Arc<Value<J>>>),
     /// Option value.
-    Option(Option<Arc<Value>>),
+    Option(Option<Arc<Value<J>>>),
     /// Boolean value.
     Boolean(bool),
     /// Unsigned integer.
@@ -376,26 +378,29 @@ pub enum ValueInner {
     /// Tuple of values.
     ///
     /// Each component may have a different type.
-    Tuple(Arc<[Value]>),
+    Tuple(Arc<[Value<J>]>),
     /// Array of values.
     ///
     /// Each element must have the same type.
-    Array(Arc<[Value]>),
+    Array(Arc<[Value<J>]>),
     /// Bounded list of values.
     ///
     /// Each element must have the same type.
     // FIXME: Prevent construction of invalid lists (that run out of bounds)
-    List(Arc<[Value]>, NonZeroPow2Usize),
+    List(Arc<[Value<J>]>, NonZeroPow2Usize),
+
+    #[doc(hidden)]
+    _Marker(PhantomData<J>),
 }
 
 /// A SimplicityHL value.
 #[derive(Clone, Eq, PartialEq, Hash)]
-pub struct Value {
-    inner: ValueInner,
+pub struct Value<J: JetHL> {
+    inner: ValueInner<J>,
     ty: ResolvedType,
 }
 
-impl TreeLike for &Value {
+impl<J: JetHL> TreeLike for &Value<J> {
     fn as_node(&self) -> Tree<Self> {
         match &self.inner {
             ValueInner::Option(None) | ValueInner::Boolean(_) | ValueInner::UInt(_) => {
@@ -407,17 +412,18 @@ impl TreeLike for &Value {
             ValueInner::Tuple(elements)
             | ValueInner::Array(elements)
             | ValueInner::List(elements, _) => Tree::Nary(elements.iter().collect()),
+            ValueInner::_Marker(_) => unreachable!(),
         }
     }
 }
 
-impl fmt::Debug for Value {
+impl<J: JetHL> fmt::Debug for Value<J> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}: {}", self, self.ty())
     }
 }
 
-impl fmt::Display for Value {
+impl<J: JetHL> fmt::Display for Value<J> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut print_hex_byte_array = false;
         for data in self.verbose_pre_order_iter() {
@@ -503,6 +509,7 @@ impl fmt::Display for Value {
                         write!(f, "]")?;
                     }
                 }
+                ValueInner::_Marker(_) => unreachable!(),
             }
         }
 
@@ -510,7 +517,7 @@ impl fmt::Display for Value {
     }
 }
 
-impl ValueConstructible for Value {
+impl<J: JetHL> ValueConstructible for Value<J> {
     type Type = ResolvedType;
 
     fn left(left: Self, right: Self::Type) -> Self {
@@ -587,7 +594,7 @@ impl ValueConstructible for Value {
     }
 }
 
-impl From<bool> for Value {
+impl<J: JetHL> From<bool> for Value<J> {
     fn from(value: bool) -> Self {
         Self {
             inner: ValueInner::Boolean(value),
@@ -596,7 +603,7 @@ impl From<bool> for Value {
     }
 }
 
-impl From<UIntValue> for Value {
+impl<J: JetHL> From<UIntValue> for Value<J> {
     fn from(value: UIntValue) -> Self {
         Self {
             ty: value.get_type().into(),
@@ -605,9 +612,9 @@ impl From<UIntValue> for Value {
     }
 }
 
-impl Value {
+impl<J: JetHL> Value<J> {
     /// Access the inner structure of the value.
-    pub const fn inner(&self) -> &ValueInner {
+    pub const fn inner(&self) -> &ValueInner<J> {
         &self.inner
     }
 
@@ -646,7 +653,7 @@ impl Value {
     }
 }
 
-impl Value {
+impl<J: JetHL> Value<J> {
     /// Create value from a constant expression.
     ///
     /// ## Errors
@@ -658,7 +665,7 @@ impl Value {
     /// - Witness expressions
     /// - Match expressions
     /// - Call expressions
-    pub fn from_const_expr(expr: &ast::Expression) -> Option<Self> {
+    pub fn from_const_expr(expr: &ast::Expression<J>) -> Option<Self> {
         use ast::ExprTree;
         use ast::SingleExpressionInner as S;
 
@@ -792,7 +799,7 @@ impl Value {
 }
 
 #[cfg(feature = "arbitrary")]
-impl crate::ArbitraryOfType for Value {
+impl<J: JetHL> crate::ArbitraryOfType for Value<J> {
     type Type = ResolvedType;
 
     fn arbitrary_of_type(
@@ -841,7 +848,7 @@ impl crate::ArbitraryOfType for Value {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a> arbitrary::Arbitrary<'a> for Value {
+impl<'a, J: JetHL> arbitrary::Arbitrary<'a> for Value<J> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use crate::ArbitraryOfType;
 
@@ -999,8 +1006,8 @@ impl From<UIntValue> for StructuralValue {
     }
 }
 
-impl From<&Value> for StructuralValue {
-    fn from(value: &Value) -> Self {
+impl<J: JetHL> From<&Value<J>> for StructuralValue {
+    fn from(value: &Value<J>) -> Self {
         let mut output = vec![];
         for data in value.post_order_iter() {
             match &data.node.inner {
@@ -1044,6 +1051,7 @@ impl From<&Value> for StructuralValue {
                     let ty = data.node.ty().as_list().expect("value is type-checked").0;
                     output.push(Self::list(elements, ty.into(), *bound));
                 }
+                ValueInner::_Marker(_) => unreachable!(),
             }
         }
         debug_assert_eq!(output.len(), 1);
@@ -1231,36 +1239,50 @@ mod destruct {
 
 #[cfg(test)]
 mod tests {
+    use simplicity::jet::Elements;
+
     use super::*;
     use crate::parse;
     use crate::types::{StructuralType, TypeConstructible};
 
     #[test]
     fn display_value() {
-        let unit = Value::unit();
+        let unit = Value::<Elements>::unit();
         assert_eq!("()", &unit.to_string());
-        let singleton = Value::tuple([Value::u1(1)]);
+        let singleton = Value::<Elements>::tuple([Value::<Elements>::u1(1)]);
         assert_eq!("(1, )", &singleton.to_string());
-        let pair = Value::tuple([Value::u8(1), Value::u8(42)]);
+        let pair = Value::<Elements>::tuple([Value::<Elements>::u8(1), Value::<Elements>::u8(42)]);
         assert_eq!("(1, 42)", &pair.to_string());
-        let triple = Value::tuple([Value::u1(1), Value::u8(42), Value::u16(1337)]);
+        let triple = Value::<Elements>::tuple([
+            Value::<Elements>::u1(1),
+            Value::<Elements>::u8(42),
+            Value::<Elements>::u16(1337),
+        ]);
         assert_eq!("(1, 42, 1337)", &triple.to_string());
-        let empty_array = Value::array([], ResolvedType::unit());
+        let empty_array = Value::<Elements>::array([], ResolvedType::unit());
         assert_eq!("[]", &empty_array.to_string());
-        let array = Value::array(
-            [Value::unit(), Value::unit(), Value::unit()],
+        let array = Value::<Elements>::array(
+            [
+                Value::<Elements>::unit(),
+                Value::<Elements>::unit(),
+                Value::<Elements>::unit(),
+            ],
             ResolvedType::unit(),
         );
         assert_eq!("[(), (), ()]", &array.to_string());
-        let list = Value::list([Value::unit()], ResolvedType::unit(), NonZeroPow2Usize::TWO);
+        let list = Value::<Elements>::list(
+            [Value::<Elements>::unit()],
+            ResolvedType::unit(),
+            NonZeroPow2Usize::TWO,
+        );
         assert_eq!("list![()]", &list.to_string());
-        let byte_array = Value::byte_array([0xde, 0xad, 0xbe, 0xef]);
+        let byte_array = Value::<Elements>::byte_array([0xde, 0xad, 0xbe, 0xef]);
         assert_eq!("0xdeadbeef", &byte_array.to_string());
     }
 
     #[test]
     fn value_is_of_type() {
-        let bit = Value::from(false);
+        let bit = Value::<Elements>::from(false);
         let actual_boolean = ResolvedType::boolean();
         let structural_boolean = ResolvedType::either(ResolvedType::unit(), ResolvedType::unit());
         assert_eq!(
@@ -1275,7 +1297,11 @@ mod tests {
     fn parse_const_expression() {
         let bound4 = NonZeroPow2Usize::new(4).unwrap();
         let string_ty_value = [
-            ("false", ResolvedType::boolean(), Value::from(false)),
+            (
+                "false",
+                ResolvedType::boolean(),
+                Value::<Elements>::from(false),
+            ),
             ("42", ResolvedType::u8(), Value::u8(42)),
             (
                 "Left(false)",

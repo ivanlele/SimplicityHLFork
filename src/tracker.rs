@@ -5,7 +5,7 @@ use simplicity::{Ihr, RedeemNode, Value as SimValue, ValueRef};
 
 use crate::debug::{DebugSymbols, TrackedCallName};
 use crate::either::Either;
-use crate::jet::{source_type, target_type};
+use crate::jet::JetHL;
 use crate::str::AliasName;
 use crate::types::AliasedType;
 use crate::value::StructuralValue;
@@ -15,13 +15,13 @@ use crate::{ResolvedType, Value};
 ///
 /// The first argument is the label (variable name or expression), and the second
 /// is the formatted value.
-type DebugSink<'a> = Box<dyn FnMut(&str, &Value) + 'a>;
+type DebugSink<'a, J> = Box<dyn FnMut(&str, &Value<J>) + 'a>;
 
 /// Callback signature for receiving jet execution traces.
 ///
 /// Arguments are: the jet that was executed, its input arguments (if successfully parsed),
 /// and the result (`None` if the jet failed).
-type JetTraceSink<'a> = Box<dyn FnMut(Elements, Option<&[Value]>, Option<Value>) + 'a>;
+type JetTraceSink<'a, J> = Box<dyn FnMut(Elements, Option<&[Value<J>]>, Option<Value<J>>) + 'a>;
 
 /// Callback signature for receiving warnings during execution.
 type WarningSink<'a> = Box<dyn Fn(&str) + 'a>;
@@ -37,12 +37,16 @@ pub enum TrackerLogLevel {
 }
 
 /// Default debug sink that prints labeled values to stderr.
-fn default_debug_sink(label: &str, value: &Value) {
+fn default_debug_sink<J: JetHL>(label: &str, value: &Value<J>) {
     println!("DBG: {label} = {value}");
 }
 
 /// Default jet trace sink that prints jet calls to stderr.
-fn default_jet_trace_sink(jet: Elements, args: Option<&[Value]>, result: Option<Value>) {
+fn default_jet_trace_sink<J: JetHL>(
+    jet: Elements,
+    args: Option<&[Value<J>]>,
+    result: Option<Value<J>>,
+) {
     print!("{jet:?}(");
     if let Some(args) = args {
         for (i, arg) in args.iter().enumerate() {
@@ -82,15 +86,15 @@ fn default_warning_sink(message: &str) {
 ///
 /// let pruned = program.prune_with_tracker(&env, &mut tracker)?;
 /// ```
-pub struct DefaultTracker<'a> {
+pub struct DefaultTracker<'a, J: JetHL> {
     debug_symbols: &'a DebugSymbols,
-    debug_sink: Option<DebugSink<'a>>,
-    jet_trace_sink: Option<JetTraceSink<'a>>,
+    debug_sink: Option<DebugSink<'a, J>>,
+    jet_trace_sink: Option<JetTraceSink<'a, J>>,
     warning_sink: Option<WarningSink<'a>>,
     inner: SetTracker,
 }
 
-impl<'a> DefaultTracker<'a> {
+impl<'a, J: JetHL> DefaultTracker<'a, J> {
     /// Creates a new tracker bound to the given debug symbol table.
     pub fn new(debug_symbols: &'a DebugSymbols) -> Self {
         Self {
@@ -105,7 +109,7 @@ impl<'a> DefaultTracker<'a> {
     /// Enables forwarding of `debug!()` calls to the provided sink.
     pub fn with_debug_sink<F>(mut self, sink: F) -> Self
     where
-        F: FnMut(&str, &Value) + 'a,
+        F: FnMut(&str, &Value<J>) + 'a,
     {
         self.debug_sink = Some(Box::new(sink));
         self
@@ -119,7 +123,7 @@ impl<'a> DefaultTracker<'a> {
     /// Enables forwarding of jet call traces to the provided sink.
     pub fn with_jet_trace_sink<F>(mut self, sink: F) -> Self
     where
-        F: FnMut(Elements, Option<&[Value]>, Option<Value>) + 'a,
+        F: FnMut(Elements, Option<&[Value<J>]>, Option<Value<J>>) + 'a,
     {
         self.jet_trace_sink = Some(Box::new(sink));
         self
@@ -216,11 +220,11 @@ impl<'a> DefaultTracker<'a> {
         node: &RedeemNode<Elements>,
         jet: Elements,
         output: &NodeOutput,
-    ) -> Option<Value> {
+    ) -> Option<Value<J>> {
         match output.clone() {
             NodeOutput::Success(mut output_frame) => {
                 let target_ty = &node.arrow().target;
-                let jet_target_ty = resolve_jet_type(&target_type(jet));
+                let jet_target_ty = resolve_jet_type(&Elements::target_type(jet));
 
                 // Skip the leading bit when the frame has extra padding.
                 // This occurs because some jets (like eq_64 etc.) are wrapped in AssertL (a Case combinator),
@@ -290,7 +294,7 @@ impl<'a> DefaultTracker<'a> {
     }
 }
 
-impl PruneTracker<Elements> for DefaultTracker<'_> {
+impl<J: JetHL> PruneTracker<Elements> for DefaultTracker<'_, J> {
     fn contains_left(&self, ihr: Ihr) -> bool {
         if PruneTracker::<Elements>::contains_left(&self.inner, ihr) {
             return true;
@@ -316,7 +320,7 @@ impl PruneTracker<Elements> for DefaultTracker<'_> {
     }
 }
 
-impl ExecTracker<Elements> for DefaultTracker<'_> {
+impl<J: JetHL> ExecTracker<Elements> for DefaultTracker<'_, J> {
     fn visit_node(&mut self, node: &RedeemNode<Elements>, input: FrameIter, output: NodeOutput) {
         match node.inner() {
             Inner::Jet(jet) => self.handle_jet(node, *jet, &input, &output),
@@ -329,8 +333,11 @@ impl ExecTracker<Elements> for DefaultTracker<'_> {
 }
 
 /// Parses jet input arguments from the bit machine's read frame.
-fn parse_jet_arguments(jet: Elements, input_frame: &mut FrameIter) -> Result<Vec<Value>, String> {
-    let source_types = source_type(jet);
+fn parse_jet_arguments<J: JetHL>(
+    jet: Elements,
+    input_frame: &mut FrameIter,
+) -> Result<Vec<Value<J>>, String> {
+    let source_types = Elements::source_type(jet);
     if source_types.is_empty() {
         return Ok(vec![]);
     }
@@ -422,9 +429,9 @@ mod tests {
     type DebugStore = Rc<RefCell<HashMap<String, String>>>;
     type JetStore = Rc<RefCell<HashMap<String, (Option<Vec<String>>, Option<String>)>>>;
 
-    fn create_test_tracker(
+    fn create_test_tracker<J: JetHL>(
         debug_symbols: &DebugSymbols,
-    ) -> (DefaultTracker<'_>, DebugStore, JetStore) {
+    ) -> (DefaultTracker<'_, J>, DebugStore, JetStore) {
         let debug_store: DebugStore = Rc::default();
         let jet_store: JetStore = Rc::default();
 
@@ -474,9 +481,12 @@ mod tests {
     fn test_debug_and_jet_tracing() {
         let program = TemplateProgram::new(TEST_PROGRAM).unwrap();
         let program = program.instantiate(Arguments::default(), true).unwrap();
-        let satisfied = program.satisfy(WitnessValues::default()).unwrap();
+        let satisfied = program
+            .satisfy(WitnessValues::<Elements>::default())
+            .unwrap();
 
-        let (mut tracker, debug_store, jet_store) = create_test_tracker(&satisfied.debug_symbols);
+        let (mut tracker, debug_store, jet_store) =
+            create_test_tracker::<Elements>(&satisfied.debug_symbols);
         let env = create_test_env();
 
         let _ = satisfied
@@ -542,10 +552,14 @@ mod tests {
         let env = create_test_env();
 
         let program = TemplateProgram::new(TEST_ARITHMETIC_JETS).unwrap();
-        let program = program.instantiate(Arguments::default(), true).unwrap();
-        let satisfied = program.satisfy(WitnessValues::default()).unwrap();
+        let program = program
+            .instantiate(Arguments::<Elements>::default(), true)
+            .unwrap();
+        let satisfied = program
+            .satisfy(WitnessValues::<Elements>::default())
+            .unwrap();
 
-        let (mut tracker, _, jet_store) = create_test_tracker(&satisfied.debug_symbols);
+        let (mut tracker, _, jet_store) = create_test_tracker::<Elements>(&satisfied.debug_symbols);
 
         let _ = satisfied.redeem().prune_with_tracker(&env, &mut tracker);
 

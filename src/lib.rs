@@ -22,8 +22,7 @@ mod witness;
 
 use std::sync::Arc;
 
-use simplicity::jet::elements::ElementsEnv;
-use simplicity::{jet::Elements, CommitNode, RedeemNode};
+use simplicity::{CommitNode, RedeemNode};
 
 pub extern crate either;
 pub extern crate simplicity;
@@ -31,6 +30,7 @@ pub use simplicity::elements;
 
 use crate::debug::DebugSymbols;
 use crate::error::{ErrorCollector, WithFile};
+use crate::jet::JetHL;
 use crate::parse::ParseFromStrWithErrors;
 pub use crate::types::ResolvedType;
 pub use crate::value::Value;
@@ -40,12 +40,12 @@ pub use crate::witness::{Arguments, Parameters, WitnessTypes, WitnessValues};
 ///
 /// A template has parameterized values that need to be supplied with arguments.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TemplateProgram {
-    simfony: ast::Program,
+pub struct TemplateProgram<J: JetHL> {
+    simfony: ast::Program<J>,
     file: Arc<str>,
 }
 
-impl TemplateProgram {
+impl<J: JetHL> TemplateProgram<J> {
     /// Parse the template of a SimplicityHL program.
     ///
     /// ## Errors
@@ -79,9 +79,9 @@ impl TemplateProgram {
     /// Use [`TemplateProgram::parameters`] to see which parameters the program has.
     pub fn instantiate(
         &self,
-        arguments: Arguments,
+        arguments: Arguments<J>,
         include_debug_symbols: bool,
-    ) -> Result<CompiledProgram, String> {
+    ) -> Result<CompiledProgram<J>, String> {
         arguments
             .is_consistent(self.simfony.parameters())
             .map_err(|error| error.to_string())?;
@@ -101,13 +101,13 @@ impl TemplateProgram {
 
 /// A SimplicityHL program, compiled to Simplicity.
 #[derive(Clone, Debug)]
-pub struct CompiledProgram {
-    simplicity: Arc<named::CommitNode<Elements>>,
+pub struct CompiledProgram<J: JetHL> {
+    simplicity: Arc<named::CommitNode<J>>,
     witness_types: WitnessTypes,
     debug_symbols: DebugSymbols,
 }
 
-impl CompiledProgram {
+impl<J: JetHL> CompiledProgram<J> {
     /// Parse and compile a SimplicityHL program from the given string.
     ///
     /// ## See
@@ -116,7 +116,7 @@ impl CompiledProgram {
     /// - [`TemplateProgram::instantiate`]
     pub fn new<Str: Into<Arc<str>>>(
         s: Str,
-        arguments: Arguments,
+        arguments: Arguments<J>,
         include_debug_symbols: bool,
     ) -> Result<Self, String> {
         TemplateProgram::new(s)
@@ -129,7 +129,7 @@ impl CompiledProgram {
     }
 
     /// Access the Simplicity target code, without witness data.
-    pub fn commit(&self) -> Arc<CommitNode<Elements>> {
+    pub fn commit(&self) -> Arc<CommitNode<J>> {
         named::forget_names(&self.simplicity)
     }
 
@@ -139,7 +139,7 @@ impl CompiledProgram {
     ///
     /// - Witness values have a different type than declared in the SimplicityHL program.
     /// - There are missing witness values.
-    pub fn satisfy(&self, witness_values: WitnessValues) -> Result<SatisfiedProgram, String> {
+    pub fn satisfy(&self, witness_values: WitnessValues<J>) -> Result<SatisfiedProgram<J>, String> {
         self.satisfy_with_env(witness_values, None)
     }
 
@@ -152,9 +152,9 @@ impl CompiledProgram {
     /// - There are missing witness values.
     pub fn satisfy_with_env(
         &self,
-        witness_values: WitnessValues,
-        env: Option<&ElementsEnv<Arc<elements::Transaction>>>,
-    ) -> Result<SatisfiedProgram, String> {
+        witness_values: WitnessValues<J>,
+        env: Option<&J::Environment>,
+    ) -> Result<SatisfiedProgram<J>, String> {
         witness_values
             .is_consistent(&self.witness_types)
             .map_err(|e| e.to_string())?;
@@ -172,12 +172,12 @@ impl CompiledProgram {
 
 /// A SimplicityHL program, compiled to Simplicity and satisfied with witness data.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SatisfiedProgram {
-    simplicity: Arc<RedeemNode<Elements>>,
+pub struct SatisfiedProgram<J: JetHL> {
+    simplicity: Arc<RedeemNode<J>>,
     debug_symbols: DebugSymbols,
 }
 
-impl SatisfiedProgram {
+impl<J: JetHL> SatisfiedProgram<J> {
     /// Parse, compile and satisfy a SimplicityHL program from the given string.
     ///
     /// ## See
@@ -187,8 +187,8 @@ impl SatisfiedProgram {
     /// - [`CompiledProgram::satisfy`]
     pub fn new<Str: Into<Arc<str>>>(
         s: Str,
-        arguments: Arguments,
-        witness_values: WitnessValues,
+        arguments: Arguments<J>,
+        witness_values: WitnessValues<J>,
         include_debug_symbols: bool,
     ) -> Result<Self, String> {
         let compiled = CompiledProgram::new(s, arguments, include_debug_symbols)?;
@@ -196,7 +196,7 @@ impl SatisfiedProgram {
     }
 
     /// Access the Simplicity target code, including witness data.
-    pub fn redeem(&self) -> &Arc<RedeemNode<Elements>> {
+    pub fn redeem(&self) -> &Arc<RedeemNode<J>> {
         &self.simplicity
     }
 
@@ -221,6 +221,21 @@ macro_rules! impl_eq_hash {
         impl Eq for $ty {}
 
         impl std::hash::Hash for $ty {
+            fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+                $(self.$member().hash(state);)*
+            }
+        }
+    };
+    ($ty: ident<$gen: ident: $bound: path>; $($member: ident),*) => {
+        impl<$gen: $bound + PartialEq + Eq + std::hash::Hash> PartialEq for $ty<$gen> {
+            fn eq(&self, other: &Self) -> bool {
+                true $(&& self.$member() == other.$member())*
+            }
+        }
+
+        impl<$gen: $bound + PartialEq + Eq + std::hash::Hash> Eq for $ty<$gen> {}
+
+        impl<$gen: $bound + PartialEq + Eq + std::hash::Hash> std::hash::Hash for $ty<$gen> {
             fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
                 $(self.$member().hash(state);)*
             }
@@ -274,6 +289,7 @@ pub(crate) mod tests {
     use crate::parse::ParseFromStr;
     use base64::display::Base64Display;
     use base64::engine::general_purpose::STANDARD;
+    use simplicity::jet::Elements;
     use simplicity::BitMachine;
     use std::borrow::Cow;
     use std::path::Path;
@@ -287,7 +303,7 @@ pub(crate) mod tests {
         include_fee_output: bool,
     }
 
-    impl TestCase<TemplateProgram> {
+    impl TestCase<TemplateProgram<Elements>> {
         pub fn template_file<P: AsRef<Path>>(program_file_path: P) -> Self {
             let program_text = std::fs::read_to_string(program_file_path).unwrap();
             Self::template_text(Cow::Owned(program_text))
@@ -310,16 +326,19 @@ pub(crate) mod tests {
         pub fn with_argument_file<P: AsRef<Path>>(
             self,
             arguments_file_path: P,
-        ) -> TestCase<CompiledProgram> {
+        ) -> TestCase<CompiledProgram<Elements>> {
             let arguments_text = std::fs::read_to_string(arguments_file_path).unwrap();
-            let arguments = match serde_json::from_str::<Arguments>(&arguments_text) {
+            let arguments = match serde_json::from_str::<Arguments<Elements>>(&arguments_text) {
                 Ok(x) => x,
                 Err(error) => panic!("{error}"),
             };
             self.with_arguments(arguments)
         }
 
-        pub fn with_arguments(self, arguments: Arguments) -> TestCase<CompiledProgram> {
+        pub fn with_arguments(
+            self,
+            arguments: Arguments<Elements>,
+        ) -> TestCase<CompiledProgram<Elements>> {
             let program = match self.program.instantiate(arguments, true) {
                 Ok(x) => x,
                 Err(error) => panic!("{error}"),
@@ -333,34 +352,35 @@ pub(crate) mod tests {
         }
     }
 
-    impl TestCase<CompiledProgram> {
+    impl TestCase<CompiledProgram<Elements>> {
         pub fn program_file<P: AsRef<Path>>(program_file_path: P) -> Self {
-            TestCase::<TemplateProgram>::template_file(program_file_path)
-                .with_arguments(Arguments::default())
+            TestCase::<TemplateProgram<Elements>>::template_file(program_file_path)
+                .with_arguments(Arguments::<Elements>::default())
         }
 
         pub fn program_text(program_text: Cow<str>) -> Self {
-            TestCase::<TemplateProgram>::template_text(program_text)
-                .with_arguments(Arguments::default())
+            TestCase::<TemplateProgram<Elements>>::template_text(program_text)
+                .with_arguments(Arguments::<Elements>::default())
         }
 
         #[cfg(feature = "serde")]
         pub fn with_witness_file<P: AsRef<Path>>(
             self,
             witness_file_path: P,
-        ) -> TestCase<SatisfiedProgram> {
+        ) -> TestCase<SatisfiedProgram<Elements>> {
             let witness_text = std::fs::read_to_string(witness_file_path).unwrap();
-            let witness_values = match serde_json::from_str::<WitnessValues>(&witness_text) {
-                Ok(x) => x,
-                Err(error) => panic!("{error}"),
-            };
+            let witness_values =
+                match serde_json::from_str::<WitnessValues<Elements>>(&witness_text) {
+                    Ok(x) => x,
+                    Err(error) => panic!("{error}"),
+                };
             self.with_witness_values(witness_values)
         }
 
         pub fn with_witness_values(
             self,
-            witness_values: WitnessValues,
-        ) -> TestCase<SatisfiedProgram> {
+            witness_values: WitnessValues<Elements>,
+        ) -> TestCase<SatisfiedProgram<Elements>> {
             let program = match self.program.satisfy(witness_values) {
                 Ok(x) => x,
                 Err(error) => panic!("{error}"),
@@ -404,7 +424,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl TestCase<SatisfiedProgram> {
+    impl TestCase<SatisfiedProgram<Elements>> {
         #[allow(dead_code)]
         pub fn print_encoding(self) -> Self {
             let (program_bytes, witness_bytes) = self.program.redeem().to_vec_with_witness();
@@ -630,7 +650,7 @@ fn main() {
     assert!(my_true());
 }
 "#;
-        match SatisfiedProgram::new(
+        match SatisfiedProgram::<Elements>::new(
             prog_text,
             Arguments::default(),
             WitnessValues::default(),
