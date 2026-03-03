@@ -2,7 +2,6 @@ use base64::display::Base64Display;
 use base64::engine::general_purpose::STANDARD;
 use clap::{Arg, ArgAction, Command};
 
-#[cfg(feature = "serde")]
 use simplicity::jet::Elements;
 use simplicityhl::CompiledProgram;
 use std::{env, fmt};
@@ -91,7 +90,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     #[cfg(not(feature = "serde"))]
-    let args_opt: simplicityhl::Arguments = if matches.contains_id("args_file") {
+    let args_opt: simplicityhl::Arguments<Elements> = if matches.contains_id("args_file") {
         return Err(
             "Program was compiled without the 'serde' feature and cannot process .args files."
                 .into(),
