@@ -6,7 +6,7 @@ use simplicity::{Ihr, RedeemNode, Value as SimValue};
 use crate::array::Unfolder;
 use crate::debug::{DebugSymbols, TrackedCallName};
 use crate::either::Either;
-use crate::jet::{source_type, target_type};
+use crate::jet::JetHL;
 use crate::str::AliasName;
 use crate::types::AliasedType;
 use crate::value::StructuralValue;
@@ -221,7 +221,7 @@ impl<'a> DefaultTracker<'a> {
         match output.clone() {
             NodeOutput::Success(mut output_frame) => {
                 let target_ty = &node.arrow().target;
-                let jet_target_ty = resolve_jet_type(&target_type(jet));
+                let jet_target_ty = resolve_jet_type(&jet.target_type());
 
                 // Skip the leading bit when the frame has extra padding.
                 // This occurs because some jets (like eq_64 etc.) are wrapped in AssertL (a Case combinator),
@@ -331,7 +331,7 @@ impl ExecTracker<Elements> for DefaultTracker<'_> {
 
 /// Parses jet input arguments from the bit machine's read frame.
 fn parse_jet_arguments(jet: Elements, input_frame: &mut FrameIter) -> Result<Vec<Value>, String> {
-    let source_types = source_type(jet);
+    let source_types = jet.source_type();
     if source_types.is_empty() {
         return Ok(vec![]);
     }
