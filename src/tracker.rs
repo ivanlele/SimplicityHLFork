@@ -174,7 +174,7 @@ impl<'a> DefaultTracker<'a> {
     /// Handles jet node execution by decoding arguments and results.
     fn handle_jet(
         &mut self,
-        node: &RedeemNode<Elements>,
+        node: &RedeemNode,
         jet: Elements,
         input: &FrameIter,
         output: &NodeOutput,
@@ -184,11 +184,6 @@ impl<'a> DefaultTracker<'a> {
         }
 
         let mut input_frame = input.clone();
-
-        // The reason we need to advance by a bit is that the AssertL combinator is actually a Case combinator,
-        // which takes a bit of input to decide which branch to take. But this bit is "meaningless" and
-        // is always 0 because it's an assertion.
-        let _ = input_frame.next();
 
         let args = match parse_jet_arguments(jet, &mut input_frame) {
             Ok(args) => args,
@@ -213,22 +208,15 @@ impl<'a> DefaultTracker<'a> {
     }
 
     /// Parses the result of a jet execution from the output frame.
-    fn parse_jet_result(
-        node: &RedeemNode<Elements>,
-        jet: Elements,
-        output: &NodeOutput,
-    ) -> Option<Value> {
+    fn parse_jet_result(node: &RedeemNode, jet: Elements, output: &NodeOutput) -> Option<Value> {
         match output.clone() {
             NodeOutput::Success(mut output_frame) => {
                 let target_ty = &node.arrow().target;
                 let jet_target_ty = resolve_jet_type(&target_type(jet));
 
-                // Skip the leading bit when the frame has extra padding.
-                // This occurs because some jets (like eq_64 etc.) are wrapped in AssertL (a Case combinator),
-                // see compile::with_debug_symbol
-                if target_ty.as_sum().is_some() {
-                    let _ = output_frame.next();
-                }
+                // The tracker's output bit iterator is anchored at the write frame's
+                // current cursor position (see rust-simplicity 9cd3446), so the jet's
+                // output bits start immediately and no leading bit needs to be skipped.
 
                 let output_value = SimValue::from_padded_bits(&mut output_frame, target_ty)
                     .expect("output from bit machine is always well-formed");
@@ -247,12 +235,7 @@ impl<'a> DefaultTracker<'a> {
     }
 
     /// Handles debug node execution by resolving symbols and decoding values.
-    fn handle_debug(
-        &mut self,
-        node: &RedeemNode<Elements>,
-        input: &FrameIter,
-        cmr: &simplicity::Cmr,
-    ) {
+    fn handle_debug(&mut self, node: &RedeemNode, input: &FrameIter, cmr: &simplicity::Cmr) {
         if self.debug_sink.is_none() {
             return;
         }
@@ -291,9 +274,9 @@ impl<'a> DefaultTracker<'a> {
     }
 }
 
-impl PruneTracker<Elements> for DefaultTracker<'_> {
+impl PruneTracker for DefaultTracker<'_> {
     fn contains_left(&self, ihr: Ihr) -> bool {
-        if PruneTracker::<Elements>::contains_left(&self.inner, ihr) {
+        if PruneTracker::contains_left(&self.inner, ihr) {
             return true;
         }
 
@@ -305,7 +288,7 @@ impl PruneTracker<Elements> for DefaultTracker<'_> {
     }
 
     fn contains_right(&self, ihr: Ihr) -> bool {
-        if PruneTracker::<Elements>::contains_right(&self.inner, ihr) {
+        if PruneTracker::contains_right(&self.inner, ihr) {
             return true;
         }
 
@@ -317,10 +300,17 @@ impl PruneTracker<Elements> for DefaultTracker<'_> {
     }
 }
 
-impl ExecTracker<Elements> for DefaultTracker<'_> {
-    fn visit_node(&mut self, node: &RedeemNode<Elements>, input: FrameIter, output: NodeOutput) {
+impl ExecTracker for DefaultTracker<'_> {
+    fn visit_node(&mut self, node: &RedeemNode, input: FrameIter, output: NodeOutput) {
         match node.inner() {
-            Inner::Jet(jet) => self.handle_jet(node, *jet, &input, &output),
+            Inner::Jet(jet) => {
+                let jet = jet
+                    .as_any()
+                    .downcast_ref::<Elements>()
+                    .expect("expected Elements jet");
+
+                self.handle_jet(node, *jet, &input, &output)
+            }
             Inner::AssertL(_, cmr) => self.handle_debug(node, &input, cmr),
             _ => {}
         }
