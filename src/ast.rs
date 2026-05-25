@@ -1,12 +1,11 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use either::Either;
 use miniscript::iter::{Tree, TreeLike};
-use simplicity::jet::Elements;
+use simplicity::jet::{Elements, Jet};
 
 use crate::debug::{CallTracker, DebugSymbols, TrackedCallName};
 use crate::driver::{FileScoped, SymbolTable, MAIN_MODULE, MAIN_STR};
@@ -271,10 +270,11 @@ impl Call {
 impl_eq_hash!(Call; name, args);
 
 /// Name of a called function.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, Hash)]
+#[allow(clippy::derived_hash_with_manual_eq)] // see comment on manual `PartialEq` impl below
 pub enum CallName {
-    /// Elements jet.
-    Jet(Elements),
+    /// Jet type.
+    Jet(Box<dyn JetHL>),
     /// [`Either::unwrap_left`].
     UnwrapLeft(ResolvedType),
     /// [`Either::unwrap_right`].
@@ -302,6 +302,30 @@ pub enum CallName {
     ArrayFold(CustomFunction, NonZeroUsize),
     /// Loop over the given function a bounded number of times until it returns success.
     ForWhile(CustomFunction, Pow2Usize),
+}
+
+// Manually implemented because the 1.74 (MSRV) derive expands to a body that
+// moves out of the non-Copy `Box<dyn Jet>` field, later rustc versions are
+// fine.
+impl PartialEq for CallName {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Jet(a), Self::Jet(b)) => a == b,
+            (Self::UnwrapLeft(a), Self::UnwrapLeft(b)) => a == b,
+            (Self::UnwrapRight(a), Self::UnwrapRight(b)) => a == b,
+            (Self::IsNone(a), Self::IsNone(b)) => a == b,
+            (Self::Unwrap, Self::Unwrap) => true,
+            (Self::Assert, Self::Assert) => true,
+            (Self::Panic, Self::Panic) => true,
+            (Self::Debug, Self::Debug) => true,
+            (Self::TypeCast(a), Self::TypeCast(b)) => a == b,
+            (Self::Custom(a), Self::Custom(b)) => a == b,
+            (Self::Fold(a, b), Self::Fold(c, d)) => a == c && b == d,
+            (Self::ArrayFold(a, b), Self::ArrayFold(c, d)) => a == c && b == d,
+            (Self::ForWhile(a, b), Self::ForWhile(c, d)) => a == c && b == d,
+            _ => false,
+        }
+    }
 }
 
 /// Definition of a custom function.
@@ -515,6 +539,31 @@ impl TreeLike for ExprTree<'_> {
     }
 }
 
+type JetParser = fn(&str) -> Option<Box<dyn JetHL>>;
+
+#[derive(Debug, Clone)]
+pub struct JetHinter {
+    pub jet_parser: JetParser,
+    pub verify: Box<dyn JetHL>,
+}
+
+impl JetHinter {
+    pub const ELEMENTS_JET_PARSER: JetParser = |name| {
+        if let Ok(jet) = Elements::parse(name) {
+            return Some(Box::new(jet));
+        }
+
+        None
+    };
+
+    pub fn elements() -> Self {
+        Self {
+            jet_parser: Self::ELEMENTS_JET_PARSER,
+            verify: Box::new(Elements::Verify),
+        }
+    }
+}
+
 /// Scope for generating the abstract syntax tree.
 ///
 /// The scope is used for:
@@ -522,7 +571,6 @@ impl TreeLike for ExprTree<'_> {
 /// 2. Resolving type aliases
 /// 3. Assigning types to each witness expression
 /// 4. Resolving calls to custom functions
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct Scope {
     file_id: usize,
     variables: Vec<HashMap<Identifier, ResolvedType>>,
@@ -534,6 +582,7 @@ struct Scope {
     functions_table: SymbolTable<FunctionName>,
     is_main: bool,
     call_tracker: CallTracker,
+    jet_hinter: JetHinter,
 }
 
 impl Default for Scope {
@@ -541,6 +590,8 @@ impl Default for Scope {
         Self::new(
             SymbolTable::<AliasName>::default(),
             SymbolTable::<FunctionName>::default(),
+            // TODO: Should be passed in global configuration
+            JetHinter::elements(),
         )
     }
 }
@@ -549,6 +600,7 @@ impl Scope {
     pub fn new(
         aliases_table: SymbolTable<AliasName>,
         functions_table: SymbolTable<FunctionName>,
+        jet_hinter: JetHinter,
     ) -> Self {
         Self {
             file_id: MAIN_MODULE,
@@ -561,6 +613,7 @@ impl Scope {
             functions_table,
             is_main: false,
             call_tracker: CallTracker::default(),
+            jet_hinter,
         }
     }
 
@@ -847,9 +900,9 @@ trait AbstractSyntaxTree: Sized {
 }
 
 impl Program {
-    pub fn analyze(from: &driver::Program) -> Result<Self, RichError> {
+    pub fn analyze(from: &driver::Program, jet_hinter: JetHinter) -> Result<Self, RichError> {
         let unit = ResolvedType::unit();
-        let mut scope = Scope::new(from.aliases().clone(), from.functions().clone());
+        let mut scope = Scope::new(from.aliases().clone(), from.functions().clone(), jet_hinter);
 
         let items = from
             .items()
@@ -1442,8 +1495,8 @@ impl AbstractSyntaxTree for CallName {
         scope: &mut Scope,
     ) -> Result<Self, RichError> {
         match from.name() {
-            parse::CallName::Jet(name) => match Elements::from_str(name.as_inner()) {
-                Ok(jet) if !jet.is_disabled() => Ok(Self::Jet(jet)),
+            parse::CallName::Jet(name) => match (scope.jet_hinter.jet_parser)(name.as_inner()) {
+                Some(jet) if !jet.is_disabled() => Ok(Self::Jet(jet)),
                 _ => Err(Error::JetDoesNotExist(name.clone())).with_span(from),
             },
             parse::CallName::UnwrapLeft(right_ty) => scope
@@ -1654,6 +1707,7 @@ impl AsRef<Span> for ModuleAssignment {
 #[cfg(test)]
 mod alias_scope_regression_tests {
     use super::Program;
+    use crate::ast::JetHinter;
     use crate::driver::tests::setup_graph;
     use crate::error::ErrorCollector;
 
@@ -1666,7 +1720,7 @@ mod alias_scope_regression_tests {
             .unwrap()
             .expect("driver build should succeed");
 
-        Program::analyze(&driver_program)
+        Program::analyze(&driver_program, JetHinter::elements())
             .map(|_| ())
             .map_err(|e| e.to_string())
     }

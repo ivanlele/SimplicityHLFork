@@ -3,6 +3,7 @@
 #[cfg(any(fuzzing, test))]
 fn do_test(data: &[u8]) {
     use arbitrary::Arbitrary;
+    use simplicityhl::ast::JetHinter;
     use std::sync::Arc;
 
     use simplicityhl::error::{ErrorCollector, WithContent};
@@ -23,7 +24,7 @@ fn do_test(data: &[u8]) {
         return;
     };
 
-    let ast_program = match ast::Program::analyze(&driver_program) {
+    let ast_program = match ast::Program::analyze(&driver_program, JetHinter::elements()) {
         Ok(x) => x,
         Err(_) => return,
     };
@@ -32,7 +33,7 @@ fn do_test(data: &[u8]) {
         Err(..) => return,
     };
     let simplicity_named_construct = ast_program
-        .compile(arguments, false)
+        .compile(arguments, false, JetHinter::elements())
         .with_content("")
         .expect("AST should compile with given arguments");
     let _simplicity_commit = named::forget_names(&simplicity_named_construct);

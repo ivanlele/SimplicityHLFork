@@ -3,14 +3,49 @@ use crate::types::BuiltinAlias::*;
 use crate::types::UIntType::*;
 use crate::types::*;
 
+use simplicity::jet::DynJet;
 use simplicity::jet::Elements;
 use simplicity::jet::Jet;
 
-pub trait JetHL {
+pub trait JetHLDyn {
+    fn clone_box(&self) -> Box<dyn JetHL>;
+    fn as_jet(&self) -> &dyn Jet;
+}
+
+pub trait JetHL: JetHLDyn + DynJet + Jet + std::fmt::Debug + Send + Sync + 'static {
     fn source_type(&self) -> Vec<AliasedType>;
     fn target_type(&self) -> AliasedType;
-    fn verify() -> Box<dyn Jet>;
     fn is_disabled(&self) -> bool;
+}
+
+impl JetHLDyn for Elements {
+    fn clone_box(&self) -> Box<dyn JetHL> {
+        Box::new(*self)
+    }
+
+    fn as_jet(&self) -> &dyn Jet {
+        self
+    }
+}
+
+impl Clone for Box<dyn JetHL> {
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}
+
+impl PartialEq for Box<dyn JetHL> {
+    fn eq(&self, other: &Self) -> bool {
+        (**self).dyn_eq(other.as_jet())
+    }
+}
+
+impl Eq for Box<dyn JetHL> {}
+
+impl std::hash::Hash for Box<dyn JetHL> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).dyn_hash(state)
+    }
 }
 
 impl JetHL for Elements {
@@ -20,10 +55,6 @@ impl JetHL for Elements {
 
     fn target_type(&self) -> AliasedType {
         target_type(*self)
-    }
-
-    fn verify() -> Box<dyn Jet> {
-        Box::new(Elements::Verify)
     }
 
     fn is_disabled(&self) -> bool {

@@ -361,6 +361,7 @@ mod tests {
     use simplicity::jet::elements::{ElementsEnv, ElementsUtxo};
     use simplicity::Cmr;
 
+    use crate::ast::JetHinter;
     use crate::elements::confidential::Asset;
     use crate::elements::hashes::Hash;
     use crate::elements::pset::Input;
@@ -438,7 +439,7 @@ mod tests {
 
     #[test]
     fn test_debug_and_jet_tracing() {
-        let program = TemplateProgram::new(TEST_PROGRAM).unwrap();
+        let program = TemplateProgram::new(TEST_PROGRAM, JetHinter::elements()).unwrap();
         let program = program.instantiate(Arguments::default(), true).unwrap();
         let satisfied = program.satisfy(WitnessValues::default()).unwrap();
 
@@ -507,7 +508,7 @@ mod tests {
     fn test_arith_jet_trace_regression() {
         let env = create_test_env();
 
-        let program = TemplateProgram::new(TEST_ARITHMETIC_JETS).unwrap();
+        let program = TemplateProgram::new(TEST_ARITHMETIC_JETS, JetHinter::elements()).unwrap();
         let program = program.instantiate(Arguments::default(), true).unwrap();
         let satisfied = program.satisfy(WitnessValues::default()).unwrap();
 
@@ -561,7 +562,7 @@ mod tests {
 
         let env = create_test_env();
 
-        let program = TemplateProgram::new(TEST_FULL_MULTIPLY_JETS).unwrap();
+        let program = TemplateProgram::new(TEST_FULL_MULTIPLY_JETS, JetHinter::elements()).unwrap();
         let program = program.instantiate(Arguments::default(), true).unwrap();
         let satisfied = program.satisfy(WitnessValues::default()).unwrap();
 
