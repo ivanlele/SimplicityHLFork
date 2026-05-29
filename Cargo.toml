@@ -28,9 +28,10 @@ path = "codegen/src/main.rs"
 required-features = ["docs", "serde"]
 
 [features]
-default = [ "serde" ]
+default = ["serde"]
 serde = ["dep:serde", "dep:serde_json"]
 docs = []
+external-jets = ["dep:dlopen2"]
 
 [dependencies]
 base64 = "0.21.2"
@@ -43,13 +44,14 @@ itertools = "0.13.0"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
 clap = "4.5.37"
 chumsky = "0.11.2"
+dlopen2 = { version = "0.8.1", optional = true }
 
 [target.wasm32-unknown-unknown.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
 
 [workspace]
 members = ["codegen", "fuzz"]
-exclude = ["bitcoind-tests"]
+exclude = ["bitcoind-tests", "external-jet-lib-exemplar"]
 
 [workspace.metadata.rbmt.toolchains]
 nightly = "nightly-2025-08-23"

@@ -1,5 +1,7 @@
 pub mod core;
 pub mod elements;
+#[cfg(feature = "external-jets")]
+pub mod external;
 
 use crate::num::NonZeroPow2Usize;
 use crate::types::*;
