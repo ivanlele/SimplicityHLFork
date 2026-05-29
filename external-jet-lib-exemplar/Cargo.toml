@@ -1,0 +1,14 @@
+[package]
+name = "external-jet-lib-exemplar"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "external-lib-consumer"
+path = "src/main.rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+simplicityhl = { path = "..", features = ["external-jets"] }

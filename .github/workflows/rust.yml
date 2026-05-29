@@ -21,7 +21,17 @@ jobs:
       - name: "Setup cargo-rbmt"
         uses: ./.github/actions/setup-rbmt
       - name: "Run tests"
+        if: matrix.toolchain != 'msrv'
         run: cargo rbmt --lock-file existing test --toolchain ${{ matrix.toolchain }}
+      - name: "Run tests (MSRV)"
+        if: matrix.toolchain == 'msrv'
+        run: |
+          # external-jets requires dlopen2 which needs Rust >= 1.85.0;
+          # rbmt hardcodes --all-features so we run feature combinations manually.
+          cargo rbmt --lock-file existing run --toolchain msrv -- test
+          cargo rbmt --lock-file existing run --toolchain msrv -- test --no-default-features
+          cargo rbmt --lock-file existing run --toolchain msrv -- test --no-default-features --features serde
+          cargo rbmt --lock-file existing run --toolchain msrv -- test --no-default-features --features docs
 
   Windows:
     name: Test - Windows stable toolchain
@@ -106,3 +116,22 @@ jobs:
             echo "fuzzing $target"
             cargo fuzz run --fuzz-dir fuzz "$target" -- -runs=1
           done
+
+  ExternalJetLib:
+    name: External Jet Library
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout repo"
+        uses: actions/checkout@v4
+
+      - name: "Setup cargo-rbmt"
+        uses: ./.github/actions/setup-rbmt
+
+      - name: "Build external jet dylib"
+        run: cargo rbmt --lock-file existing run --toolchain stable -- build --manifest-path external-jet-lib-exemplar/Cargo.toml --lib
+
+      - name: "Build external-lib-consumer binary"
+        run: cargo rbmt --lock-file existing run --toolchain stable -- build --manifest-path external-jet-lib-exemplar/Cargo.toml --bin external-lib-consumer
+
+      - name: "Run external-lib-consumer with compiled dylib"
+        run: ./target/debug/external-lib-consumer ./target/debug/libexternal_jet_lib_exemplar.so

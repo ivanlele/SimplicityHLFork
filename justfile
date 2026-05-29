@@ -16,7 +16,7 @@ build_features:
 
 # Run unit tests
 test:
-    cargo test --workspace --all-features
+    cargo test --workspace --features docs
 
 # Check code (CI)
 check:
