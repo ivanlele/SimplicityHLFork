@@ -28,9 +28,10 @@ path = "codegen/src/main.rs"
 required-features = ["docs", "serde"]
 
 [features]
-default = [ "serde" ]
+default = ["serde", "docs"]
 serde = ["dep:serde", "dep:serde_json"]
 docs = []
+external-jets = []
 
 [dependencies]
 base64 = "0.21.2"
@@ -48,7 +49,7 @@ chumsky = "0.11.2"
 getrandom = { version = "0.2", features = ["js"] }
 
 [workspace]
-members = ["codegen", "fuzz"]
+members = ["codegen", "fuzz", "external-jet-lib-exemplar"]
 exclude = ["bitcoind-tests"]
 
 [workspace.metadata.rbmt.toolchains]
